@@ -34,6 +34,8 @@ import (
 	"k8s.io/kubectl/pkg/scheme"
 	"k8s.io/kubectl/pkg/util/i18n"
 	"k8s.io/kubectl/pkg/util/templates"
+    tzcronjobv1alpha1 "github.com/hiddeco/cronjobber/pkg/apis/cronjobber/v1alpha1"
+    cronjobberscheme "github.com/hiddeco/cronjobber/pkg/client/clientset/versioned/scheme"
 )
 
 var (
@@ -50,6 +52,10 @@ var (
 		# Create a job from a CronJob named "a-cronjob"
 		kubectl create job test-job --from=cronjob/a-cronjob`))
 )
+
+func init() {
+    cronjobberscheme.AddToScheme(scheme.Scheme)
+}
 
 // CreateJobOptions is the command line options for 'create job'
 type CreateJobOptions struct {
@@ -181,14 +187,24 @@ func (o *CreateJobOptions) Run() error {
 
 		uncastVersionedObj, err := scheme.Scheme.ConvertToVersion(infos[0].Object, batchv1beta1.SchemeGroupVersion)
 		if err != nil {
-			return fmt.Errorf("from must be an existing cronjob: %v", err)
-		}
-		cronJob, ok := uncastVersionedObj.(*batchv1beta1.CronJob)
-		if !ok {
-			return fmt.Errorf("from must be an existing cronjob")
-		}
+            uncastVersionedObj, err = scheme.Scheme.ConvertToVersion(infos[0].Object, tzcronjobv1alpha1.SchemeGroupVersion)
+            if err != nil {
+                return fmt.Errorf("from must be an existing tzcronjob: %v", err)
+            }
+            cronJob, ok := uncastVersionedObj.(*tzcronjobv1alpha1.TZCronJob)
+            if !ok {
+                return fmt.Errorf("from must be an existing cronjob")
+            }
 
-		job = o.createJobFromCronJob(cronJob)
+            job = o.createJobFromTZCronJob(cronJob)
+		}else {
+            cronJob, ok := uncastVersionedObj.(*batchv1beta1.CronJob)
+            if !ok {
+                return fmt.Errorf("from must be an existing cronjob")
+            }
+
+            job = o.createJobFromCronJob(cronJob)
+        }
 	}
 	if !o.DryRun {
 		var err error
@@ -241,6 +257,29 @@ func (o *CreateJobOptions) createJobFromCronJob(cronJob *batchv1beta1.CronJob) *
 			Labels:      cronJob.Spec.JobTemplate.Labels,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(cronJob, appsv1.SchemeGroupVersion.WithKind("CronJob")),
+			},
+		},
+		Spec: cronJob.Spec.JobTemplate.Spec,
+	}
+}
+
+
+func (o *CreateJobOptions) createJobFromTZCronJob(cronJob *tzcronjobv1alpha1.TZCronJob) *batchv1.Job {
+	annotations := make(map[string]string)
+	annotations["tzcronjob/instantiate"] = "manual"
+	for k, v := range cronJob.Spec.JobTemplate.Annotations {
+		annotations[k] = v
+	}
+
+	return &batchv1.Job{
+		// this is ok because we know exactly how we want to be serialized
+		TypeMeta: metav1.TypeMeta{APIVersion: batchv1.SchemeGroupVersion.String(), Kind: "Job"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        o.Name,
+			Annotations: annotations,
+			Labels:      cronJob.Spec.JobTemplate.Labels,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(cronJob, appsv1.SchemeGroupVersion.WithKind("TZCronJob")),
 			},
 		},
 		Spec: cronJob.Spec.JobTemplate.Spec,
